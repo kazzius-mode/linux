@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * Module kdb support
- *
- * Copyright (C) 2010 Jason Wessel
+ * Improved kdb lsmod implementation
+ * Original by Jason Wessel (2010)
+ * Enhanced for clarity, structure and maintainability
  */
 
 #include <linux/module.h>
@@ -10,54 +10,108 @@
 #include "internal.h"
 
 /*
- * kdb_lsmod - This function implements the 'lsmod' command.  Lists
- *	currently loaded kernel modules.
- *	Mostly taken from userland lsmod.
+ * Print module memory sizes
+ */
+static void kdb_print_mem_sizes(struct module *mod)
+{
+    int i;
+
+    for (i = 0; i < MOD_MEM_NUM_TYPES; i++)
+        kdb_printf("/%8u", mod->mem[i].size);
+}
+
+/*
+ * Print module memory base addresses
+ */
+static void kdb_print_mem_bases(struct module *mod)
+{
+    int i;
+
+    for (i = 0; i < MOD_MEM_NUM_TYPES; i++)
+        kdb_printf("/0x%px", mod->mem[i].base);
+}
+
+/*
+ * Return a string describing module state
+ */
+static const char *kdb_module_state_str(enum module_state state)
+{
+    switch (state) {
+    case MODULE_STATE_GOING:
+        return "Unloading";
+    case MODULE_STATE_COMING:
+        return "Loading";
+    default:
+        return "Live";
+    }
+}
+
+/*
+ * Print "Used by" list with no trailing spaces
+ */
+#ifdef CONFIG_MODULE_UNLOAD
+static void kdb_print_used_by(struct module *mod)
+{
+    struct module_use *use;
+    bool first = true;
+
+    kdb_printf(" [");
+
+    list_for_each_entry(use, &mod->source_list, source_list) {
+        kdb_printf("%s%s",
+            first ? " " : ", ",
+            use->target->name);
+        first = false;
+    }
+
+    kdb_printf(" ]");
+}
+#endif
+
+/*
+ * Improved implementation of the kdb 'lsmod' command
  */
 int kdb_lsmod(int argc, const char **argv)
 {
-	struct module *mod;
+    struct module *mod;
 
-	if (argc != 0)
-		return KDB_ARGCOUNT;
+    if (argc != 0)
+        return KDB_ARGCOUNT;
 
-	kdb_printf("Module                  Size  modstruct     Used by\n");
-	list_for_each_entry(mod, &modules, list) {
-		if (mod->state == MODULE_STATE_UNFORMED)
-			continue;
+    kdb_printf("Module                  Size            modstruct   State       Base addresses\n");
 
-		kdb_printf("%-20s%8u", mod->name, mod->mem[MOD_TEXT].size);
-		kdb_printf("/%8u", mod->mem[MOD_RODATA].size);
-		kdb_printf("/%8u", mod->mem[MOD_RO_AFTER_INIT].size);
-		kdb_printf("/%8u", mod->mem[MOD_DATA].size);
+    list_for_each_entry(mod, &modules, list) {
 
-		kdb_printf("  0x%px ", (void *)mod);
-#ifdef CONFIG_MODULE_UNLOAD
-		kdb_printf("%4d ", module_refcount(mod));
-#endif
-		if (mod->state == MODULE_STATE_GOING)
-			kdb_printf(" (Unloading)");
-		else if (mod->state == MODULE_STATE_COMING)
-			kdb_printf(" (Loading)");
-		else
-			kdb_printf(" (Live)");
-		kdb_printf(" 0x%px", mod->mem[MOD_TEXT].base);
-		kdb_printf("/0x%px", mod->mem[MOD_RODATA].base);
-		kdb_printf("/0x%px", mod->mem[MOD_RO_AFTER_INIT].base);
-		kdb_printf("/0x%px", mod->mem[MOD_DATA].base);
+        if (mod->state == MODULE_STATE_UNFORMED)
+            continue;
+
+        /* Name and text section size */
+        kdb_printf("%-20s %8u", mod->name, mod->mem[MOD_TEXT].size);
+
+        /* Remaining section sizes */
+        kdb_print_mem_sizes(mod);
+
+        /* Module struct address */
+        kdb_printf("  0x%px", (void *)mod);
 
 #ifdef CONFIG_MODULE_UNLOAD
-		{
-			struct module_use *use;
-
-			kdb_printf(" [ ");
-			list_for_each_entry(use, &mod->source_list,
-					    source_list)
-				kdb_printf("%s ", use->target->name);
-			kdb_printf("]\n");
-		}
+        /* Reference count */
+        kdb_printf(" %4d", module_refcount(mod));
 #endif
-	}
 
-	return 0;
+        /* State */
+        kdb_printf(" (%s)", kdb_module_state_str(mod->state));
+
+        /* Base memory addresses */
+        kdb_print_mem_bases(mod);
+
+#ifdef CONFIG_MODULE_UNLOAD
+        /* Used by [] list */
+        kdb_print_used_by(mod);
+#endif
+
+        kdb_printf("\n");
+    }
+
+    return 0;
 }
